@@ -14,4 +14,4 @@ from tno.mpc.encryption_schemes.dgk.dgk import DGKCiphertext as DGKCiphertext
 from tno.mpc.encryption_schemes.dgk.dgk import DGKPublicKey as DGKPublicKey
 from tno.mpc.encryption_schemes.dgk.dgk import DGKSecretKey as DGKSecretKey
 
-__version__ = "2.1.1"
+__version__ = "3.0.5"

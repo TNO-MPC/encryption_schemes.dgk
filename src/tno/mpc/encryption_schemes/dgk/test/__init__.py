@@ -1,6 +1,7 @@
 """
 Testing module of the tno.mpc.encryption_schemes.dgk library
 """
+
 from contextlib import contextmanager
 from typing import Iterator
 
@@ -33,12 +34,12 @@ def encrypt_with_freshness(m: Plaintext, scheme: DGK, safe: bool) -> DGKCipherte
 @contextmanager
 def conditional_pywarn(truthy: bool, match: str) -> Iterator[None]:
     """
-    Conditionally wraps statement in pytest.warns context manager.
+    Conditionally wraps statement in pytest.warns(EncryptionSchemeWarning) contextmanager.
 
-    :param truthy: Flags whether statement should be ran in pytest.warns
-    :param match: Match parameter for pytest.warns
-    :return: _description_
-    :yield: _description_
+    :param truthy: If True, activate pytest.warns contextmanager. Otherwise, do not activate a
+        contextmanager.
+    :param match: Match parameter for pytest.warns.
+    :return: Context where EncyrptionSchemeWarning is expected if truthy holds.
     """
     if truthy:
         with pytest.warns(EncryptionSchemeWarning) as record:
@@ -46,10 +47,13 @@ def conditional_pywarn(truthy: bool, match: str) -> Iterator[None]:
             assert (
                 len(record) >= 1  # Duplicate warnings possible
             ), f"Expected to catch one EncryptionSchemeWarning, caught {len(record)}."
-            for rec_msg in (str(rec.message) for rec in record):
-                assert (
-                    rec_msg == match
-                ), f'Expected message "{match}", received message "{rec_msg}".'
+            warn_messages = [str(rec.message) for rec in record]
+            joined_messages = "\n".join(
+                '"' + message + '"' for message in warn_messages
+            )
+            assert any(
+                match == message for message in warn_messages
+            ), f'Expected message "{match}", received messages:\n{joined_messages}.'
     else:
         yield
 
@@ -67,14 +71,10 @@ def dgk_scheme(with_precision: bool) -> DGK:
             public_key,
             secret_key,
             precision=1,
-            nr_of_threads=3,
             debug=False,
-            start_generation=False,
         )
     return DGK(
         public_key,
         secret_key,
-        nr_of_threads=3,
         debug=False,
-        start_generation=False,
     )

@@ -6,23 +6,19 @@ from __future__ import annotations
 
 import secrets
 import warnings
-from queue import Queue  # pylint: disable=unused-import
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Union, cast
+from dataclasses import asdict, dataclass
+from functools import cached_property, partial
+from typing import Any, Iterable, Tuple, TypedDict, Union, cast, get_args
 
-from typing_extensions import TypedDict, get_args
-
-from tno.mpc.encryption_schemes.templates.asymmetric_encryption_scheme import (
+from tno.mpc.encryption_schemes.templates import (
     AsymmetricEncryptionScheme,
-    PublicKey,
-    SecretKey,
-)
-from tno.mpc.encryption_schemes.templates.encryption_scheme import (
     EncodedPlaintext,
     EncryptionSchemeWarning,
-)
-from tno.mpc.encryption_schemes.templates.randomized_encryption_scheme import (
+    PublicKey,
     RandomizableCiphertext,
     RandomizedEncryptionScheme,
+    SecretKey,
+    SerializationError,
 )
 from tno.mpc.encryption_schemes.utils import (
     FixedPoint,
@@ -58,79 +54,29 @@ WARN_UNFRESH_SERIALIZATION = (
 )
 
 
-class SerializationError(Exception):
-    """
-    Communication error for DGK.
-    """
-
-    def __init__(self) -> None:
-        super().__init__(
-            "The tno.mpc.communication package has not been installed. "
-            "Please install this package before you call the serialisation code."
-        )
-
-
+@dataclass(frozen=True, eq=True)
 class DGKPublicKey(PublicKey):
-    """
+    r"""
     PublicKey for the DGK encryption scheme.
+
+    Constructs a new DGK public key.
+
+    :param g: Generator of order $v_p \cdot v_q \cdot u \mod n$.
+    :param h: Generator of the invertible elements modulo $n$ of order $v_p \cdot v_q$.
+    :param u: Modulus of the plaintext space.
+    :param n: Modulus of the ciphertext space.
+    :param t: The number of bits $t$ of $v_p$ and $v_q$.
     """
 
-    def __init__(self, g: int, h: int, u: int, n: int, t: int):
-        r"""
-        Constructs a new DGK public key.
-
-        :param g: Generator of order $v_p \cdot v_q \cdot u \mod n$
-        :param h: Generator of the invertible elements modulo n of order $v_p \cdot v_q$
-        :param u: Modulus of the plaintext space.
-        :param n: Modulus of the ciphertext space.
-        :param t: The number of bits $t$ of $v_p$ and $v_q$.
-        """
-        super().__init__()
-
-        self.g = g
-        self.h = h
-        self.u = u
-        self.n = n
-        self.t = t
-
-    def __hash__(self) -> int:
-        """
-        Compute a hash from this DGKPublicKey instance.
-
-        :return: Hash value.
-        """
-        return hash((self.g, self.h, self.u, self.n, self.t))
-
-    def __eq__(self, other: object) -> bool:
-        """
-        Compare this DGKPublicKey with another to determine (in)equality.
-
-        :param other: Object to compare this DGKPublicKey with.
-        :raise TypeError: When other object is not a DGKPublicKey.
-        :return: Boolean value representing (in)equality of both objects.
-        """
-        if not isinstance(other, DGKPublicKey):
-            raise TypeError(
-                f"Expected comparison with another DGKPublicKey, not {type(other)}"
-            )
-        return (
-            self.g == other.g
-            and self.h == other.h
-            and self.u == other.u
-            and self.n == other.n
-            and self.t == other.t
-        )
+    g: int
+    h: int
+    u: int
+    n: int
+    t: int
 
     # region Serialization logic
 
-    class SerializedDGKPublicKey(TypedDict):
-        g: int
-        h: int
-        u: int
-        n: int
-        t: int
-
-    def serialize(self, **_kwargs: Any) -> DGKPublicKey.SerializedDGKPublicKey:
+    def serialize(self, **_kwargs: Any) -> dict[str, Any]:
         r"""
         Serialization function for public keys, which will be passed to the communication module.
 
@@ -140,18 +86,10 @@ class DGKPublicKey(PublicKey):
         """
         if not COMMUNICATION_INSTALLED:
             raise SerializationError()
-        return {
-            "g": self.g,
-            "h": self.h,
-            "u": self.u,
-            "n": self.n,
-            "t": self.t,
-        }
+        return asdict(self)
 
     @staticmethod
-    def deserialize(
-        obj: DGKPublicKey.SerializedDGKPublicKey, **_kwargs: Any
-    ) -> DGKPublicKey:
+    def deserialize(obj: dict[str, Any], **_kwargs: Any) -> DGKPublicKey:
         r"""
         Deserialization function for public keys, which will be passed to the communication module.
 
@@ -162,76 +100,39 @@ class DGKPublicKey(PublicKey):
         """
         if not COMMUNICATION_INSTALLED:
             raise SerializationError()
-        return DGKPublicKey(
-            g=obj["g"],
-            h=obj["h"],
-            u=obj["u"],
-            n=obj["n"],
-            t=obj["t"],
-        )
+        return DGKPublicKey(**obj)
 
     # endregion
 
 
+@dataclass(frozen=True, eq=True)
 class DGKSecretKey(SecretKey):
     """
     SecretKey for the DGK encryption scheme.
+
+    Constructs a new DGK secret key.
+
+    :param v_p: Prime number used during decryption
+    :param v_q: Prime number used during decryption
+    :param p: Prime factor of modulus $n$
+    :param q: Prime factor of modulus $n$
     """
 
-    def __init__(self, v_p: int, v_q: int, p: int, q: int):
+    v_p: int
+    v_q: int
+    p: int
+    q: int
+
+    @cached_property
+    def v_p_v_q(self) -> int:
         """
-        Constructs a new DGK secret key.
-
-        :param v_p: Prime number used during decryption
-        :param v_q: Prime number used during decryption
-        :param p: Prime factor of modulus $n$
-        :param q: Prime factor of modulus $n$
+        Cached product of v_p and v_q.
         """
-        super().__init__()
-
-        self.v_p = v_p
-        self.v_q = v_q
-        self.p = p
-        self.q = q
-
-        self.v_p_v_q = self.v_p * self.v_q
-
-    def __hash__(self) -> int:
-        """
-        Compute a hash from this DGKSecretKey instance.
-
-        :return: Hash value.
-        """
-        return hash((self.v_p, self.v_q, self.p, self.q))
-
-    def __eq__(self, other: object) -> bool:
-        """
-        Compare this DGKSecretKey with another to determine (in)equality.
-
-        :param other: Object to compare this DGKSecretKey with.
-        :raise TypeError: When other object is not a DGKSecretKey.
-        :return: Boolean value representing (in)equality of both objects.
-        """
-        if not isinstance(other, DGKSecretKey):
-            raise TypeError(
-                f"Expected comparison with another DGKSecretKey, not {type(other)}"
-            )
-        return (
-            self.v_p == other.v_p
-            and self.v_q == other.v_q
-            and self.p == other.p
-            and self.q == other.q
-        )
+        return self.v_p * self.v_q
 
     # region Serialization logic
 
-    class SerializedDGKSecretKey(TypedDict):
-        v_p: int
-        v_q: int
-        p: int
-        q: int
-
-    def serialize(self, **_kwargs: Any) -> DGKSecretKey.SerializedDGKSecretKey:
+    def serialize(self, **_kwargs: Any) -> dict[str, Any]:
         r"""
         Serialization function for secret keys, which will be passed to the communication module.
 
@@ -241,17 +142,10 @@ class DGKSecretKey(SecretKey):
         """
         if not COMMUNICATION_INSTALLED:
             raise SerializationError()
-        return {
-            "v_p": self.v_p,
-            "v_q": self.v_q,
-            "p": self.p,
-            "q": self.q,
-        }
+        return asdict(self)
 
     @staticmethod
-    def deserialize(
-        obj: DGKSecretKey.SerializedDGKSecretKey, **_kwargs: Any
-    ) -> DGKSecretKey:
+    def deserialize(obj: dict[str, Any], **_kwargs: Any) -> DGKSecretKey:
         r"""
         Deserialization function for public keys, which will be passed to the communication module
 
@@ -262,12 +156,7 @@ class DGKSecretKey(SecretKey):
         """
         if not COMMUNICATION_INSTALLED:
             raise SerializationError()
-        return DGKSecretKey(
-            v_p=obj["v_p"],
-            v_q=obj["v_q"],
-            p=obj["p"],
-            q=obj["q"],
-        )
+        return DGKSecretKey(**obj)
 
     # endregion
 
@@ -276,13 +165,13 @@ KeyMaterial = Tuple[DGKPublicKey, DGKSecretKey]
 Plaintext = Union[int, float, FixedPoint]
 
 
-class DGKCiphertext(RandomizableCiphertext[KeyMaterial, Plaintext, int, int]):
+class DGKCiphertext(RandomizableCiphertext[KeyMaterial, Plaintext, int, int, int]):
     """
     Ciphertext for the DGK asymmetric encryption scheme. This ciphertext is rerandomizable
     and supports homomorphic operations.
     """
 
-    scheme: DGK  # type: ignore[assignment]
+    scheme: DGK
 
     def __init__(self, raw_value: int, scheme: DGK, *, fresh: bool = False):
         """
@@ -360,7 +249,9 @@ class DGKCiphertext(RandomizableCiphertext[KeyMaterial, Plaintext, int, int]):
         if not COMMUNICATION_INSTALLED:
             raise SerializationError()
         if not self.fresh:
-            warnings.warn(WARN_UNFRESH_SERIALIZATION, EncryptionSchemeWarning)
+            warnings.warn(
+                WARN_UNFRESH_SERIALIZATION, EncryptionSchemeWarning, stacklevel=2
+            )
             self.randomize()
         self._fresh = False
         return {
@@ -401,7 +292,7 @@ class DGK(
         DGKPublicKey,
         DGKSecretKey,
     ],
-    RandomizedEncryptionScheme[KeyMaterial, Plaintext, int, int, DGKCiphertext],
+    RandomizedEncryptionScheme[KeyMaterial, Plaintext, int, int, DGKCiphertext, int],
 ):
     """
     DGK Encryption Scheme. This is an AsymmetricEncryptionScheme, with a public and secret key.
@@ -415,17 +306,10 @@ class DGK(
     def __init__(
         self,
         public_key: DGKPublicKey,
-        secret_key: Optional[DGKSecretKey],
+        secret_key: DGKSecretKey | None,
         precision: int = 0,
         full_decryption: bool = True,
         share_secret_key: bool = False,
-        randomizations: Optional["Queue[int]"] = None,
-        max_size: int = 100,
-        total: Optional[int] = None,
-        nr_of_threads: int = 1,
-        path: Optional[str] = None,
-        separator: str = ",",
-        start_generation: bool = True,
         debug: bool = False,
     ):
         """
@@ -433,39 +317,25 @@ class DGK(
         precision for floating point encryption.
 
         :param public_key: Public key for this DGK Scheme.
-        :param secret_key: Optional Secret Key for this DGK Scheme (None when unknown).
-        :param precision: Floating point precision of this encoding (Default: 0), in decimal places.
+        :param secret_key: Secret Key for this DGK Scheme.
+        :param precision: Floating point precision of this encoding, in decimal places.
         :param full_decryption: Boolean value stating whether full decryptions should be possible. If True, a
             decryption lookup table will be constructed. If False, only checking for 0 is possible.
         :param share_secret_key: Boolean value stating whether the secret key should be
             included in serialization. This should only be set to True if one is really sure of it.
-            (Default: False)
-        :param randomizations: queue with randomizations. If no queue is given, it creates a
-            fresh one. (Default: None)
-        :param max_size: maximum size of the queue. (Default: 100)
-        :param total: upper bound on the total amount of randomizations to generate. (Default: None)
-        :param nr_of_threads: number of generation worker threads that should be started.
-            (Default: 1)
-        :param path: path (including filename) to the file that contains randomizations.
-            By default no path is given and no randomness is extracted from any files. (Default: "")
-        :param separator: separator for the random values in the given file. (Default: ",")
-        :param start_generation: flag that determines whether the scheme starts generating
-            randomness immediately. (Default: True)
         :param debug: flag to determine whether debug information should be displayed.
-            (Default: False)
         """
+        self._generate_randomness = partial(  # type: ignore[method-assign]
+            self._generate_randomness_from_args,
+            public_h=public_key.h,
+            public_n=public_key.n,
+            public_t=public_key.t,
+        )
         AsymmetricEncryptionScheme.__init__(
             self, public_key=public_key, secret_key=secret_key
         )
         RandomizedEncryptionScheme.__init__(
             self,
-            randomizations=randomizations,
-            max_size=max_size,
-            total=total,
-            nr_of_threads=nr_of_threads,
-            path=path,
-            separator=separator,
-            start_generation=start_generation,
             debug=debug,
         )
 
@@ -478,16 +348,16 @@ class DGK(
         self.share_secret_key = share_secret_key
 
         # Create decryption table
-        self.decryption_table: Optional[Dict[int, int]] = None
+        self.decryption_table: dict[int, int] | None = None
         if secret_key is not None and full_decryption:
             self.decryption_table = DGK._create_decryption_table(public_key, secret_key)
 
-        self.client_history: List[HTTPClient] = []
+        self.client_history: list[HTTPClient] = []
 
     @staticmethod
     def _create_decryption_table(
         public_key: DGKPublicKey, secret_key: DGKSecretKey
-    ) -> Dict[int, int]:
+    ) -> dict[int, int]:
         """
         Create decryption table given the public and secret key.
 
@@ -585,7 +455,7 @@ class DGK(
         ) % (p * q)
 
     @staticmethod
-    def generate_key_material(  # type: ignore[override]
+    def generate_key_material(
         v_bits: int,
         n_bits: int,
         u: int,
@@ -765,7 +635,9 @@ class DGK(
         """
         new_ciphertext_fresh = ciphertext.fresh
         if new_ciphertext_fresh:
-            warnings.warn(WARN_INEFFICIENT_HOM_OPERATION, EncryptionSchemeWarning)
+            warnings.warn(
+                WARN_INEFFICIENT_HOM_OPERATION, EncryptionSchemeWarning, stacklevel=2
+            )
 
         # ciphertext.get_value() automatically marks ciphertext as not fresh
         return DGKCiphertext(
@@ -777,7 +649,7 @@ class DGK(
     def add(
         self,
         ciphertext_1: DGKCiphertext,
-        ciphertext_2: Union[DGKCiphertext, Plaintext],
+        ciphertext_2: DGKCiphertext | Plaintext,
     ) -> DGKCiphertext:
         """
         Add the underlying plaintext value of ciphertext_1 with the underlying plaintext value of
@@ -803,7 +675,9 @@ class DGK(
 
         new_ciphertext_fresh = ciphertext_1.fresh or ciphertext_2.fresh
         if new_ciphertext_fresh:
-            warnings.warn(WARN_INEFFICIENT_HOM_OPERATION, EncryptionSchemeWarning)
+            warnings.warn(
+                WARN_INEFFICIENT_HOM_OPERATION, EncryptionSchemeWarning, stacklevel=2
+            )
 
         # ciphertext.get_value() automatically marks ciphertext as not fresh
         return DGKCiphertext(
@@ -836,7 +710,9 @@ class DGK(
 
         new_ciphertext_fresh = ciphertext.fresh
         if new_ciphertext_fresh:
-            warnings.warn(WARN_INEFFICIENT_HOM_OPERATION, EncryptionSchemeWarning)
+            warnings.warn(
+                WARN_INEFFICIENT_HOM_OPERATION, EncryptionSchemeWarning, stacklevel=2
+            )
 
         return DGKCiphertext(
             pow(ciphertext.get_value(), scalar, self.public_key.n),
@@ -860,20 +736,24 @@ class DGK(
             and self.public_key == other.public_key
         )
 
-    def generate_randomness(self) -> int:
-        """
+    @staticmethod
+    def _generate_randomness_from_args(
+        public_h: int, public_n: int, public_t: int
+    ) -> int:
+        r"""
         Method to generate randomness for DGK.
 
+        :param public_h: Generator of the invertible elements modulo $n$ of order $v_p \cdot v_q$.
+        :param public_n: Modulus of the ciphertext space.
+        :param public_t: Number of bits of $v_p$ and $v_q$.
         :return: A random number.
         """
         # sample 2.5t random bits
-        random_element = (
-            secrets.randbelow((1 << int(2.5 * (self.public_key.t + 1))) - 1) + 1
-        )
-        return pow_mod(self.public_key.h, random_element, self.public_key.n)
+        random_element = secrets.randbelow((1 << int(2.5 * (public_t + 1))) - 1) + 1
+        return pow_mod(public_h, random_element, public_n)
 
     @classmethod
-    def id_from_arguments(  # type: ignore[override]
+    def id_from_arguments(
         cls,
         public_key: DGKPublicKey,
         precision: int = 0,
@@ -899,7 +779,7 @@ class DGK(
     def serialize(
         self,
         *,
-        destination: Optional[Union[HTTPClient, List[HTTPClient]]] = None,
+        destination: HTTPClient | list[HTTPClient] | None = None,
         **_kwargs: Any,
     ) -> DGK.SerializedDGK:
         r"""
@@ -967,7 +847,7 @@ class DGK(
     def deserialize(
         obj: DGK.SerializedDGK,
         *,
-        origin: Optional[HTTPClient] = None,
+        origin: HTTPClient | None = None,
         **_kwargs: Any,
     ) -> DGK:
         r"""
@@ -1013,8 +893,6 @@ class DGK(
                     public_key=pubkey,
                     secret_key=obj["seckey"] if "seckey" in obj else None,
                     precision=precision,
-                    nr_of_threads=0,
-                    start_generation=False,
                 )
                 dgk.save_globally()
         if origin is not None and origin not in dgk.client_history:

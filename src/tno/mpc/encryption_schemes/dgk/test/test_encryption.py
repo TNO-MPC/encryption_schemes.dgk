@@ -1,6 +1,7 @@
 """
 This module tests the encryption functionality of DGK.
 """
+
 import itertools
 import math
 import secrets
